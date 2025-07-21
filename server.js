@@ -1,12 +1,19 @@
 const express = require('express');
 const bodyParser = require('body-parser');
-require('dotenv').config(); // Charge les variables depuis .env
-
 const https = require('https');
+require('dotenv').config();
 
+const app = express();
+app.use(bodyParser.json());
+
+const VERIFY_TOKEN = process.env.VERIFY_TOKEN || 'yehouenou_token';
+const PAGE_ACCESS_TOKEN = process.env.PAGE_ACCESS_TOKEN || 'votre_token_meta';
+const PORT = process.env.PORT || 3000;
+
+/**
+ * Envoi d’un message texte via l’API Messenger Graph
+ */
 function sendMessage(recipientId, messageText) {
-  const PAGE_ACCESS_TOKEN = process.env.PAGE_ACCESS_TOKEN;
-
   const postData = JSON.stringify({
     recipient: { id: recipientId },
     message: { text: messageText }
@@ -26,55 +33,64 @@ function sendMessage(recipientId, messageText) {
     let data = '';
     res.on('data', chunk => (data += chunk));
     res.on('end', () => {
-      console.log(`Réponse Messenger : ${res.statusCode} - ${data}`);
+      console.log(`✅ Réponse Messenger API : ${res.statusCode} - ${data}`);
     });
   });
 
   req.on('error', (e) => {
-    console.error(`Erreur : ${e.message}`);
+    console.error(`❌ Erreur : ${e.message}`);
   });
 
   req.write(postData);
   req.end();
 }
 
-const app = express();
-app.use(bodyParser.json());
-
-const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "mon_token";
-const PORT = process.env.PORT || 3000;
-
-// ✅ Vérification du webhook
+/**
+ * Vérification du webhook (appel GET par Meta lors de l’ajout)
+ */
 app.get('/webhook', (req, res) => {
   const mode = req.query['hub.mode'];
   const token = req.query['hub.verify_token'];
   const challenge = req.query['hub.challenge'];
 
-  if (mode && token === VERIFY_TOKEN) {
-    console.log("Vérification réussie !");
+  if (mode === 'subscribe' && token === VERIFY_TOKEN) {
+    console.log('🔐 Webhook vérifié par Facebook.');
     res.status(200).send(challenge);
   } else {
     res.sendStatus(403);
   }
 });
 
-// 📩 Réception des messages
+/**
+ * Réception des messages (appel POST par Meta quand un utilisateur envoie un message)
+ */
 app.post('/webhook', (req, res) => {
   const body = req.body;
 
   if (body.object === 'page') {
     body.entry.forEach(entry => {
-      const webhookEvent = entry.messaging[0];
-      console.log('Message reçu :', webhookEvent);
+      const messagingEvents = entry.messaging;
 
-      // Réponse automatique (exemple)
-      if (webhookEvent.message && webhookEvent.sender) {
-        const senderId = webhookEvent.sender.id;
-        const messageText = webhookEvent.message.text;
+      messagingEvents.forEach(event => {
+        const senderId = event.sender.id;
 
-        // Tu pourrais répondre ici via l'API Send de Facebook
-        console.log(`Utilisateur ${senderId} a dit : ${messageText}`);
-      }
+        // Si c’est un message texte
+        if (event.message && event.message.text) {
+          const userMessage = event.message.text;
+
+          // Réponse d’accueil personnalisée
+          const welcome = `👋 Bonjour et bienvenue dans YEHOUENOU CITY 🌆 ! Je suis Polycarpe YEHOUENOU, ton guide familial. Prêt à commencer ton enregistrement ?`;
+
+          sendMessage(senderId, welcome);
+        }
+
+        // Si c’est un postback (par exemple, bouton "Continuer")
+        if (event.postback && event.postback.payload === 'START_REGISTRATION') {
+          sendMessage(senderId, '📋 Super ! Commençons par ton nom de famille. Quel est-il ?');
+        }
+
+        // 👉 Tu pourras ajouter ici la logique pour enchaîner les étapes (prénom, date, etc.)
+      });
     });
 
     res.status(200).send('EVENT_RECEIVED');
@@ -84,5 +100,5 @@ app.post('/webhook', (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`🚀 Serveur webhook lancé sur le port ${PORT}`);
+  console.log(`🚀 YEHOUENOU CITY Webhook lancé sur le port ${PORT}`);
 });
