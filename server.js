@@ -1,21 +1,25 @@
 const express = require('express');
 const bodyParser = require('body-parser');
 const https = require('https');
+const fs = require('fs');
+const path = require('path');
 require('dotenv').config();
 
 const app = express();
 app.use(bodyParser.json());
 
-const VERIFY_TOKEN = process.env.VERIFY_TOKEN || 'yehouenou_token';
-const PAGE_ACCESS_TOKEN = process.env.PAGE_ACCESS_TOKEN || 'votre_token_meta';
+const VERIFY_TOKEN = process.env.VERIFY_TOKEN;
+const PAGE_ACCESS_TOKEN = process.env.PAGE_ACCESS_TOKEN;
 const PORT = process.env.PORT || 3000;
 
-/**
- * Envoi d’un message texte via l’API Messenger Graph
- */
-function sendMessage(recipientId, messageText) {
-  const postData = JSON.stringify({
-    recipient: { id: recipientId },
+// Mémoires temporaires en RAM
+let userStep = {};
+let userData = {};
+
+// Fonction d’envoi de message via Messenger API
+function sendMessage(userId, messageText) {
+  const data = JSON.stringify({
+    recipient: { id: userId },
     message: { text: messageText }
   });
 
@@ -25,74 +29,94 @@ function sendMessage(recipientId, messageText) {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'Content-Length': Buffer.byteLength(postData)
+      'Content-Length': Buffer.byteLength(data)
     }
   };
 
-  const req = https.request(options, (res) => {
-    let data = '';
-    res.on('data', chunk => (data += chunk));
-    res.on('end', () => {
-      console.log(`✅ Réponse Messenger API : ${res.statusCode} - ${data}`);
-    });
+  const req = https.request(options, res => {
+    res.on('data', () => {});
+    res.on('end', () => {});
   });
 
-  req.on('error', (e) => {
-    console.error(`❌ Erreur : ${e.message}`);
-  });
-
-  req.write(postData);
+  req.on('error', e => console.error('Erreur Messenger API:', e));
+  req.write(data);
   req.end();
 }
 
-/**
- * Vérification du webhook (appel GET par Meta lors de l’ajout)
- */
+// Vérification du webhook Facebook
 app.get('/webhook', (req, res) => {
   const mode = req.query['hub.mode'];
   const token = req.query['hub.verify_token'];
   const challenge = req.query['hub.challenge'];
 
   if (mode === 'subscribe' && token === VERIFY_TOKEN) {
-    console.log('🔐 Webhook vérifié par Facebook.');
     res.status(200).send(challenge);
   } else {
     res.sendStatus(403);
   }
 });
 
-/**
- * Réception des messages (appel POST par Meta quand un utilisateur envoie un message)
- */
+// Réception des messages utilisateur
 app.post('/webhook', (req, res) => {
-  const body = req.body;
-
-  if (body.object === 'page') {
-    body.entry.forEach(entry => {
-      const messagingEvents = entry.messaging;
-
-      messagingEvents.forEach(event => {
+  if (req.body.object === 'page') {
+    req.body.entry.forEach(entry => {
+      entry.messaging.forEach(event => {
         const senderId = event.sender.id;
 
-        // Si c’est un message texte
-        if (event.message && event.message.text) {
-          const userMessage = event.message.text;
-
-          // Réponse d’accueil personnalisée
-          const welcome = `👋 Bonjour et bienvenue dans YEHOUENOU CITY 🌆 ! Je suis Polycarpe YEHOUENOU, ton guide familial. Prêt à commencer ton enregistrement ?`;
-
-          sendMessage(senderId, welcome);
+        // Démarrage du flux si aucun historique
+        if (!userStep[senderId]) {
+          userStep[senderId] = 'nom';
+          userData[senderId] = {};
+          sendMessage(senderId, '👋 Bienvenue dans YEHOUENOU CITY ! Quel est ton nom de famille ?');
         }
+        else if (event.message && event.message.text) {
+          const msg = event.message.text;
+          const step = userStep[senderId];
 
-        // Si c’est un postback (par exemple, bouton "Continuer")
-        if (event.postback && event.postback.payload === 'START_REGISTRATION') {
-          sendMessage(senderId, '📋 Super ! Commençons par ton nom de famille. Quel est-il ?');
+          userData[senderId][step] = msg;
+
+          switch (step) {
+            case 'nom':
+              userStep[senderId] = 'prenoms';
+              sendMessage(senderId, '📝 Tes prénoms ?');
+              break;
+            case 'prenoms':
+              userStep[senderId] = 'naissance';
+              sendMessage(senderId, '📅 Ta date de naissance ?');
+              break;
+            case 'naissance':
+              userStep[senderId] = 'lieuNaissance';
+              sendMessage(senderId, '📍 Ton lieu de naissance ?');
+              break;
+            case 'lieuNaissance':
+              userStep[senderId] = 'residence';
+              sendMessage(senderId, '🏠 Ton lieu de résidence actuel ?');
+              break;
+            case 'residence':
+              userStep[senderId] = 'travail';
+              sendMessage(senderId, '💼 Ton métier ou occupation ?');
+              break;
+            case 'travail':
+              userStep[senderId] = 'lienNicodeme';
+              sendMessage(senderId, '🌳 Quel est ton lien avec YEHOUENOU NICODÈME (Fils, Petit-fils, Cousin, etc.) ?');
+              break;
+            case 'lienNicodeme':
+              userStep[senderId] = null;
+
+              // Sauvegarde locale
+              const outputPath = path.join(__dirname, 'dataStore.json');
+              fs.writeFileSync(outputPath, JSON.stringify(userData[senderId], null, 2));
+
+              // Génération PDF
+              const generatePDF = require('./pdfGenerator');
+              generatePDF(userData[senderId]);
+
+              sendMessage(senderId, '✅ Merci ! Ta fiche familiale a été générée 🧬. Bienvenue à YEHOUENOU CITY ✨');
+              break;
+          }
         }
-
-        // 👉 Tu pourras ajouter ici la logique pour enchaîner les étapes (prénom, date, etc.)
       });
     });
-
     res.status(200).send('EVENT_RECEIVED');
   } else {
     res.sendStatus(404);
@@ -100,5 +124,5 @@ app.post('/webhook', (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`🚀 YEHOUENOU CITY Webhook lancé sur le port ${PORT}`);
+  console.log(`📡 Webhook YEHOUENOU CITY actif sur le port ${PORT}`);
 });
